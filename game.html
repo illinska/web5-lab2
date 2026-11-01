@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Бонус — Космічна змійка</title>
+  <style>
+    :root {
+      --bg: #05060f;
+      --panel: #11162f;
+      --text: #e8ecff;
+      --muted: #8d97c7;
+      --accent: #7c5cff;
+      --accent2: #22d3ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 14px 10px 30px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: radial-gradient(circle at 50% 0%, #1a1f4a, var(--bg) 60%);
+      color: var(--text);
+      text-align: center;
+      min-height: 100vh;
+    }
+    h1 { margin: 4px 0 2px; font-size: 26px; letter-spacing: 1px; }
+    p.sub { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+
+    .scores {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin: 0 auto 10px;
+      width: min(92vw, 420px);
+    }
+    .box {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 6px 4px;
+    }
+    .box span { display: block; font-size: 12px; color: var(--muted); }
+    .box b { font-size: 22px; color: var(--accent2); }
+
+    canvas {
+      width: min(92vw, 420px);
+      height: auto;
+      aspect-ratio: 1 / 1;
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+      box-shadow: 0 0 30px rgba(124, 92, 255, 0.35);
+      background: #070a1c;
+      touch-action: none;          /* щоб свайпи не прокручували сторінку */
+    }
+
+    .controls { margin-top: 12px; }
+    button {
+      font-size: 15px;
+      padding: 10px 14px;
+      margin: 4px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      transition: filter 0.2s, transform 0.1s;
+    }
+    button:hover { filter: brightness(1.15); }
+    button:active { transform: scale(0.94); }
+    button.ghost { background: transparent; border-color: var(--accent); color: var(--text); }
+
+    /* Екранні кнопки керування для телефону */
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 62px);
+      grid-template-rows: repeat(2, 56px);
+      gap: 6px;
+      justify-content: center;
+      margin: 10px auto 0;
+    }
+    .dpad button { margin: 0; padding: 0; font-size: 22px; border-radius: 14px; }
+    .dpad .up    { grid-column: 2; grid-row: 1; }
+    .dpad .left  { grid-column: 1; grid-row: 2; }
+    .dpad .down  { grid-column: 2; grid-row: 2; }
+    .dpad .right { grid-column: 3; grid-row: 2; }
+
+    .hint { margin-top: 12px; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>🐍 Космічна змійка</h1>
+  <p class="sub">Бонусне завдання — браузерна міні-гра на JavaScript</p>
+
+  <div class="scores">
+    <div class="box"><span>Рахунок</span><b id="score">0</b></div>
+    <div class="box"><span>Рівень</span><b id="level">1</b></div>
+    <div class="box"><span>Рекорд</span><b id="best">0</b></div>
+  </div>
+
+  <canvas id="game" width="400" height="400"></canvas>
+
+  <div class="controls">
+    <button id="btnStart">▶ Старт</button>
+    <button id="btnRestart" class="ghost">⟲ Заново</button>
+    <button id="btnWalls" class="ghost">🧱 Стіни: смерть</button>
+  </div>
+
+  <div class="dpad">
+    <button class="up" data-dx="0" data-dy="-1">▲</button>
+    <button class="left" data-dx="-1" data-dy="0">◀</button>
+    <button class="down" data-dx="0" data-dy="1">▼</button>
+    <button class="right" data-dx="1" data-dy="0">▶</button>
+  </div>
+
+  <p class="hint">Керування: стрілки або WASD • пауза — пробіл • перезапуск — Enter • на телефоні — свайп або кнопки.<br>
+  Збирай зорі ⭐: кожні 5 зірок рівень підвищується і змійка пришвидшується.</p>
+
+  <script>
+    // ---------- Налаштування та елементи ----------
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const GRID = 20;                       // поле 20 x 20 клітинок
+    const CELL = canvas.width / GRID;      // розмір клітинки в пікселях
+
+    const scoreEl = document.getElementById("score");
+    const levelEl = document.getElementById("level");
+    const bestEl = document.getElementById("best");
+    const btnStart = document.getElementById("btnStart");
+    const btnWalls = document.getElementById("btnWalls");
+
+    // ---------- Змінні гри ----------
+    let snake;            // масив клітинок {x, y}, snake[0] — голова
+    let dir;              // поточний напрямок {x, y}
+    let queue;            // черга поворотів (щоб швидкі натискання не губились)
+    let food;             // позиція їжі
+    let score = 0;
+    let level = 1;
+    let best = 0;
+    let running = false;
+    let over = false;
+    let wrap = false;     // false — стіни вбивають, true — прохід крізь стіни
+    let timer = null;
+    let message = "Натисни Старт або стрілку";
+
+    // Рекорд зберігаємо в браузері (localStorage); try/catch — якщо сховище недоступне
+    try {
+      best = parseInt(localStorage.getItem("snakeBest"), 10) || 0;
+    } catch (e) {
+      best = 0;
+    }
+
+    // ---------- Допоміжні функції ----------
+    function delay() {
+      // чим вищий рівень, тим менша затримка між кроками (але не менше 60 мс)
+      return Math.max(60, 150 - (level - 1) * 12);
+    }
+
+    function updateUI() {
+      scoreEl.textContent = score;
+      levelEl.textContent = level;
+      bestEl.textContent = best;
+      btnStart.textContent = running ? "⏸ Пауза" : "▶ Старт";
+    }
+
+    function placeFood() {
+      if (snake.length >= GRID * GRID) return;   // поле заповнене
+      let free = false;
+      while (!free) {
+        food = {
+          x: Math.floor(Math.random() * GRID),
+          y: Math.floor(Math.random() * GRID)
+        };
+        // some() повертає true, якщо хоч одна клітинка змійки збігається з їжею
+        free = !snake.some(function (s) { return s.x === food.x && s.y === food.y; });
+      }
+    }
+
+    // ---------- Малювання ----------
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function drawStar(cx, cy, outer, inner) {
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? outer : inner;
+        const a = -Math.PI / 2 + i * Math.PI / 5;
+        const px = cx + Math.cos(a) * r;
+        const py = cy + Math.sin(a) * r;
+        if (i === 0) { ctx.moveTo(px, py); } else { ctx.lineTo(px, py); }
+      }
+      ctx.closePath();
+    }
+
+    function draw() {
+      // фон
+      ctx.fillStyle = "#070a1c";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // сітка
+      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < GRID; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, canvas.height);
+        ctx.moveTo(0, i * CELL); ctx.lineTo(canvas.width, i * CELL);
+        ctx.stroke();
+      }
+
+      // їжа — світна зірка
+      if (food) {
+        ctx.save();
+        ctx.shadowColor = "#fde047";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = "#fde047";
+        drawStar(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL * 0.48, CELL * 0.22);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // змійка: колір плавно змінюється від голови до хвоста
+      for (let i = snake.length - 1; i >= 0; i--) {
+        const s = snake[i];
+        const t = snake.length > 1 ? i / (snake.length - 1) : 0;
+        ctx.fillStyle = "hsl(" + (170 + t * 100) + ", 85%, " + (58 - t * 18) + "%)";
+        roundRect(s.x * CELL + 1.5, s.y * CELL + 1.5, CELL - 3, CELL - 3, 6);
+        ctx.fill();
+      }
+
+      // очі на голові
+      const h = snake[0];
+      ctx.fillStyle = "#0b1020";
+      const ex = dir.x !== 0 ? 0 : 4;
+      const ey = dir.y !== 0 ? 0 : 4;
+      const cx = h.x * CELL + CELL / 2 + dir.x * 3;
+      const cy = h.y * CELL + CELL / 2 + dir.y * 3;
+      ctx.beginPath(); ctx.arc(cx - ex, cy - ey, 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + ex, cy + ey, 2.2, 0, Math.PI * 2); ctx.fill();
+
+      // напис поверх поля (початок, пауза, кінець гри)
+      if (!running) {
+        ctx.fillStyle = "rgba(5, 6, 15, 0.65)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.font = "bold 26px Arial";
+        ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+        if (over) {
+          ctx.font = "18px Arial";
+          ctx.fillText("Рахунок: " + score + "  •  Enter — заново", canvas.width / 2, canvas.height / 2 + 34);
+        }
+      }
+    }
+
+    // ---------- Логіка гри ----------
+    function resetGame() {
+      clearTimeout(timer);
+      snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+      dir = { x: 1, y: 0 };
+      queue = [];
+      score = 0;
+      level = 1;
+      running = false;
+      over = false;
+      message = "Натисни Старт або стрілку";
+      placeFood();
+      updateUI();
+      draw();
+    }
+
+    function gameOver() {
+      running = false;
+      over = true;
+      message = "Гру закінчено";
+      clearTimeout(timer);
+      if (score > best) {
+        best = score;
+        try { localStorage.setItem("snakeBest", String(best)); } catch (e) { /* ігноруємо */ }
+      }
+      updateUI();
+      draw();
+    }
+
+    function tick() {
+      if (!running) return;
+
+      // беремо наступний поворот із черги
+      if (queue.length > 0) {
+        dir = queue.shift();
+      }
+
+      // нова позиція голови
+      const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+      if (wrap) {
+        head.x = (head.x + GRID) % GRID;       // вихід за край — з'являємось з іншого боку
+        head.y = (head.y + GRID) % GRID;
+      } else if (head.x < 0 || head.x >= GRID || head.y < 0 || head.y >= GRID) {
+        gameOver();
+        return;
+      }
+
+      const ate = food && head.x === food.x && head.y === food.y;
+
+      // зіткнення із собою (хвіст звільняється, якщо ми не їмо)
+      const body = ate ? snake : snake.slice(0, -1);
+      if (body.some(function (s) { return s.x === head.x && s.y === head.y; })) {
+        gameOver();
+        return;
+      }
+
+      snake.unshift(head);          // додаємо нову голову
+      if (ate) {
+        score += 10;
+        level = Math.floor(score / 50) + 1;   // кожні 5 зірок — новий рівень
+        placeFood();
+      } else {
+        snake.pop();                // прибираємо хвіст — змійка "їде"
+      }
+
+      updateUI();
+      draw();
+      timer = setTimeout(tick, delay());
+    }
+
+    function startGame() {
+      if (over) { resetGame(); }
+      running = true;
+      message = "Пауза";
+      updateUI();
+      draw();
+      clearTimeout(timer);
+      timer = setTimeout(tick, delay());
+    }
+
+    function pauseGame() {
+      running = false;
+      message = "Пауза";
+      clearTimeout(timer);
+      updateUI();
+      draw();
+    }
+
+    function toggleGame() {
+      if (running) { pauseGame(); } else { startGame(); }
+    }
+
+    function turn(dx, dy) {
+      // останній відомий напрямок: або з кінця черги, або поточний
+      const last = queue.length > 0 ? queue[queue.length - 1] : dir;
+      const reverse = last.x === -dx && last.y === -dy;   // розворот на 180° заборонений
+      const same = last.x === dx && last.y === dy;        // той самий напрямок
+      if (!reverse && !same && queue.length < 2) {
+        queue.push({ x: dx, y: dy });
+      }
+      if (!running) { startGame(); }                      // натискання стрілки запускає гру
+    }
+
+    // ---------- Керування: клавіатура ----------
+    document.addEventListener("keydown", function (e) {
+      const key = e.key.toLowerCase();
+      const map = {
+        arrowup: [0, -1], w: [0, -1],
+        arrowdown: [0, 1], s: [0, 1],
+        arrowleft: [-1, 0], a: [-1, 0],
+        arrowright: [1, 0], d: [1, 0]
+      };
+      if (map[key]) {
+        e.preventDefault();                 // не прокручувати сторінку стрілками
+        turn(map[key][0], map[key][1]);
+      } else if (e.key === " ") {
+        e.preventDefault();
+        toggleGame();
+      } else if (e.key === "Enter") {
+        resetGame();
+        startGame();
+      }
+    });
+
+    // ---------- Керування: кнопки та свайпи ----------
+    btnStart.addEventListener("click", toggleGame);
+    document.getElementById("btnRestart").addEventListener("click", function () {
+      resetGame();
+      startGame();
+    });
+    btnWalls.addEventListener("click", function () {
+      wrap = !wrap;
+      btnWalls.textContent = wrap ? "🧱 Стіни: прохід" : "🧱 Стіни: смерть";
+    });
+
+    document.querySelectorAll(".dpad button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        turn(Number(btn.dataset.dx), Number(btn.dataset.dy));
+      });
+    });
+
+    let touchX = 0;
+    let touchY = 0;
+    canvas.addEventListener("touchstart", function (e) {
+      touchX = e.touches[0].clientX;
+      touchY = e.touches[0].clientY;
+    }, { passive: true });
+    canvas.addEventListener("touchend", function (e) {
+      const dx = e.changedTouches[0].clientX - touchX;
+      const dy = e.changedTouches[0].clientY - touchY;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;   // надто короткий свайп
+      if (Math.abs(dx) > Math.abs(dy)) {
+        turn(dx > 0 ? 1 : -1, 0);
+      } else {
+        turn(0, dy > 0 ? 1 : -1);
+      }
+    }, { passive: true });
+
+    // ---------- Запуск ----------
+    resetGame();
+  </script>
+</body>
+</html>
